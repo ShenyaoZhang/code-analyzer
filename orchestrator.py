@@ -1,8 +1,16 @@
 import os
 import json
+import logging
 from analyzer import CodeAnalyzer
 from duplication_detector import DuplicationDetector
 from collections import defaultdict
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 class AnalysisOrchestrator:
     def __init__(self):
@@ -23,27 +31,52 @@ class AnalysisOrchestrator:
         return file_list
     
     def analyze_repository(self, repo_path):
+        logger.info(f"Starting repository analysis: {repo_path}")
+        
+        if not os.path.exists(repo_path):
+            logger.error(f"Repository path does not exist: {repo_path}")
+            raise ValueError(f"Repository path does not exist: {repo_path}")
+        
+        if not os.path.isdir(repo_path):
+            logger.error(f"Path is not a directory: {repo_path}")
+            raise ValueError(f"Path is not a directory: {repo_path}")
+        
         results = {}
         file_map = {}
 
         # Step 1: Analyze files and gather code
-        for file_path in self.get_files(repo_path):
+        files = self.get_files(repo_path)
+        logger.info(f"Found {len(files)} files to process")
+        
+        for file_path in files:
             language = self.detect_language(file_path)
             if language == "python":
-                print(f"Analyzing {file_path}...")
+                logger.info(f"Analyzing {file_path}...")
                 try:
                     with open(file_path, "r", encoding="utf-8") as f:
                         code = f.read()
                         file_map[file_path] = code
                         result = self.analyzer.analyze_python(file_path)
                         results[file_path] = result
+                except UnicodeDecodeError:
+                    logger.warning(f"Unable to decode {file_path} as UTF-8, skipping")
                 except Exception as e:
-                    print(f"Failed to analyze {file_path}: {e}")
+                    logger.error(f"Failed to analyze {file_path}: {e}", exc_info=True)
+                    results[file_path] = {
+                        "error": str(e),
+                        "file_path": file_path
+                    }
             else:
-                print(f"Skipping {file_path} — unsupported language")
+                logger.debug(f"Skipping {file_path} — unsupported language")
 
         # Step 2: Detect duplication
-        duplicates = self.dup_checker.find_duplicates(file_map)
+        logger.info("Detecting code duplication...")
+        try:
+            duplicates = self.dup_checker.find_duplicates(file_map)
+            logger.info(f"Found {len(duplicates)} duplicate code blocks")
+        except Exception as e:
+            logger.error(f"Duplication detection failed: {e}")
+            duplicates = []
 
         # Step 3: Map file path to duplicates
         dup_map = defaultdict(list)
@@ -60,6 +93,7 @@ class AnalysisOrchestrator:
             if file_path in dup_map:
                 result["duplicates"] = dup_map[file_path]
 
+        logger.info(f"Repository analysis complete: {len(results)} files analyzed")
         return results
 
 

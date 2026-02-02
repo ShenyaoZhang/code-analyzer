@@ -1,9 +1,15 @@
 import sagemaker
+import os
 from sagemaker.huggingface import HuggingFaceModel
 from sagemaker import get_execution_role, Session
 
-# Define IAM role — adjust if you're not using SageMaker Studio
-role = "arn:aws:iam::585768150727:role/SageMakerExecutionRole"
+# Get IAM role from environment variable or use execution role
+try:
+    role = os.getenv('SAGEMAKER_ROLE_ARN') or get_execution_role()
+except ValueError:
+    # Fallback to environment variable if not in SageMaker environment
+    role = os.getenv('SAGEMAKER_ROLE_ARN', 'arn:aws:iam::585768150727:role/SageMakerExecutionRole')
+    print(f"Using IAM role: {role}")
 
 # Define model hub parameters
 hub = {

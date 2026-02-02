@@ -6,9 +6,18 @@ import json
 import uuid
 import re
 import sys
+import os
+import logging
 from ml_predictor import CodeQualityPredictor  # Live model
 from recommendation_engine import CodeRecommendationEngine
 from code_metrics import CodeMetricsCalculator
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 class CodeAnalyzer:
     def __init__(self):
@@ -18,8 +27,10 @@ class CodeAnalyzer:
             "pylint": ["pylint", "--output-format=json"],
             "flake8": ["flake8", "--format=%(row)d:%(col)d:%(code)s:%(text)s"]
         }
-        # Use your deployed SageMaker endpoint name here
-        self.predictor = CodeQualityPredictor("huggingface-pytorch-inference-2025-05-16-00-58-00-996")
+        # Use environment variable for SageMaker endpoint
+        endpoint_name = os.getenv('SAGEMAKER_ENDPOINT_NAME', 'huggingface-pytorch-inference-2025-05-16-00-58-00-996')
+        self.predictor = CodeQualityPredictor(endpoint_name)
+        logger.info(f"Initialized CodeAnalyzer with endpoint: {endpoint_name}")
     
 
     def run_tool(self, tool, file_path):
@@ -30,11 +41,19 @@ class CodeAnalyzer:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 universal_newlines=True,
-                check=False
+                check=False,
+                timeout=30
             )
+            logger.debug(f"Ran {tool} on {file_path}, exit code: {result.returncode}")
             return result.stdout
+        except subprocess.TimeoutExpired:
+            logger.error(f"Timeout running {tool} on {file_path}")
+            return ""
+        except FileNotFoundError:
+            logger.error(f"{tool} not found. Please ensure it is installed.")
+            return ""
         except Exception as e:
-            print(f"[ERROR] Running {tool} failed: {e}")
+            logger.error(f"Error running {tool} on {file_path}: {e}")
             return ""
 
     def parse_flake8(self, output, file_path):
@@ -54,6 +73,8 @@ class CodeAnalyzer:
         return results
 
     def parse_pylint(self, output, file_path):
+        if not output.strip():
+            return []
         try:
             json_output = json.loads(output)
             results = []
@@ -67,9 +88,10 @@ class CodeAnalyzer:
                     "tool": "pylint",
                     "rule": item.get("symbol")
                 })
+            logger.debug(f"Parsed {len(results)} pylint issues from {file_path}")
             return results
-        except json.JSONDecodeError:
-            print("[ERROR] Failed to parse pylint JSON output")
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse pylint JSON output for {file_path}: {e}")
             return []
 
     def run_bandit(self, file_path):
@@ -79,15 +101,25 @@ class CodeAnalyzer:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 universal_newlines=True,
-                check=False
+                check=False,
+                timeout=30
             )
+            logger.debug(f"Ran bandit on {file_path}, exit code: {result.returncode}")
             return result.stdout
+        except subprocess.TimeoutExpired:
+            logger.error(f"Timeout running bandit on {file_path}")
+            return ""
+        except FileNotFoundError:
+            logger.error("Bandit not found. Please ensure it is installed.")
+            return ""
         except Exception as e:
-            print(f"[ERROR] Running Bandit failed: {e}")
+            logger.error(f"Error running bandit on {file_path}: {e}")
             return ""
 
     def parse_bandit(self, output, file_path):
         results = []
+        if not output.strip():
+            return []
         try:
             data = json.loads(output)
             for issue in data.get("results", []):
@@ -100,13 +132,16 @@ class CodeAnalyzer:
                     "tool": "bandit",
                     "rule": issue.get("test_id")
                 })
-        except json.JSONDecodeError:
-            print("[ERROR] Failed to parse Bandit JSON output")
+            logger.debug(f"Parsed {len(results)} bandit issues from {file_path}")
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse bandit JSON output for {file_path}: {e}")
         return results
 
     def analyze_python(self, file_path):
+        logger.info(f"Starting analysis of {file_path}")
         results = []
 
+        # Run static analysis tools
         flake8_output = self.run_tool("flake8", file_path)
         results.extend(self.parse_flake8(flake8_output, file_path))
 
@@ -117,12 +152,26 @@ class CodeAnalyzer:
         results.extend(self.parse_bandit(bandit_output, file_path))
 
         # ML + Metrics
-        with open(file_path, "r") as f:
-            code = f.read()
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                code = f.read()
+        except UnicodeDecodeError:
+            logger.warning(f"Unable to decode {file_path} as UTF-8, trying latin-1")
+            with open(file_path, "r", encoding="latin-1") as f:
+                code = f.read()
+        except IOError as e:
+            logger.error(f"Failed to read {file_path}: {e}")
+            raise
 
-        quality_score = self.predictor.predict_quality(code)
+        try:
+            quality_score = self.predictor.predict_quality(code)
+        except Exception as e:
+            logger.error(f"ML prediction failed for {file_path}: {e}")
+            quality_score = 0.0
+
         maintainability = self.metrics.calculate_maintainability(code)
-
+        
+        logger.info(f"Completed analysis of {file_path}: {len(results)} issues found")
         return self.format_results(results, file_path, quality_score, maintainability)
 
     def format_results(self, results, file_path, quality_score, maintainability, duplicates=None):

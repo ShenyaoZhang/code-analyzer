@@ -1,0 +1,15 @@
+# Environment Variables Template
+# Copy this file to .env and update with your actual values
+
+# AWS SageMaker Configuration
+SAGEMAKER_ENDPOINT_NAME=huggingface-pytorch-inference-2025-05-16-00-58-00-996
+SAGEMAKER_ROLE_ARN=arn:aws:iam::YOUR_ACCOUNT_ID:role/SageMakerExecutionRole
+
+# AWS Credentials (optional if using IAM roles)
+AWS_ACCESS_KEY_ID=your_access_key
+AWS_SECRET_ACCESS_KEY=your_secret_key
+AWS_DEFAULT_REGION=us-east-1
+
+# API Configuration
+LOG_LEVEL=INFO
+
